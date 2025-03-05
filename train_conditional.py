@@ -31,7 +31,7 @@ hyperparameters = {
     'num_workers': 4,
     'num_discriminator_steps': 1,
     'num_generator_steps': 1,
-    'mock_real': False,
+    'mock_real': True,
     'epochs': 200,
 
     # optimizer settings
@@ -71,7 +71,7 @@ hyperparameters = {
 
     # example image output settings
     'num_images': 4,
-    'save_directory': 'smaller_conditioning_output_dim'
+    'save_directory': 'conditional_mock_real'
 }
 index = 0
 original = hyperparameters['save_directory']
@@ -158,12 +158,21 @@ if hyperparameters['lr_scheduler']:
     generator_lr_scheduler = hyperparameters['lr_scheduler'](generator_optimizer, **hyperparameters['lr_scheduler_settings'])
     discriminator_lr_scheduler = hyperparameters['lr_scheduler'](discriminator_optimizer, **hyperparameters['lr_scheduler_settings'])
 
-def print_train_statistics(total_discriminator_combined_loss, total_discriminator_real_loss, total_discriminator_fake_loss, total_generator_loss, count):
+def print_train_statistics(discriminator_combined_loss, discriminator_real_loss, discriminator_fake_loss, generator_loss):
     print('Train statistics:')
-    print(f'\t{"Discriminator combined loss:":<30}{total_discriminator_combined_loss / count:.04f}')
-    print(f'\t{"Discriminator real loss:":<30}{total_discriminator_real_loss / count:.04f}')
-    print(f'\t{"Discriminator fake loss:":<30}{total_discriminator_fake_loss / count:.04f}')
-    print(f'\t{"Generator loss:":<30}{total_generator_loss / count:.04f}')
+    print(f'\t{"Discriminator combined loss:":<30}{discriminator_combined_loss:.04f}')
+    print(f'\t{"Discriminator real loss:":<30}{discriminator_real_loss:.04f}')
+    print(f'\t{"Discriminator fake loss:":<30}{discriminator_fake_loss:.04f}')
+    print(f'\t{"Generator loss:":<30}{generator_loss:.04f}')
+
+def print_validation_statistics(discriminator_combined_loss, discriminator_real_loss, discriminator_fake_loss, generator_loss, real_correctness_rate, generator_fooling_rate):
+    print('Validation statistics:')
+    print(f'\t{"Discriminator combined loss:":<30}{discriminator_combined_loss:.04f}')
+    print(f'\t{"Discriminator real loss:":<30}{discriminator_real_loss:.04f}')
+    print(f'\t{"Discriminator fake loss:":<30}{discriminator_fake_loss:.04f}')
+    print(f'\t{"Generator loss:":<30}{generator_loss:.04f}')
+    print(f'\t{"Real correctness rate:":<30}{real_correctness_rate:.04f}%')
+    print(f'\t{"Generator fooling rate:":<30}{generator_fooling_rate:.04f}%')
 
 def train_discriminator_one_step(generator, discriminator, x, y, loss_fn, discriminator_optimizer, mock_real=True):
     batch_size = x.shape[0]
@@ -254,11 +263,10 @@ def train(generator, discriminator, dl, loss_fn, generator_optimizer, discrimina
         batch_bar.update()
     batch_bar.close()
     print_train_statistics(
-        total_discriminator_combined_loss,
-        total_discriminator_real_loss,
-        total_discriminator_fake_loss,
-        total_generator_loss,
-        len(dl),
+        total_discriminator_combined_loss / len(dl),
+        total_discriminator_real_loss / len(dl),
+        total_discriminator_fake_loss / len(dl),
+        total_generator_loss / len(dl),
     )
 
 
@@ -267,43 +275,71 @@ def val(generator, discriminator, dl, loss_fn, hyperparameters, save_outputs=Tru
     generator.eval()
     discriminator.eval()
     
-    total_loss = 0
-    total_acc = 0
+    total_discriminator_real_loss = 0
+    total_discriminator_fake_loss = 0
+    total_discriminator_combined_loss = 0
+    total_generator_loss = 0
+    total_real_correct = 0
+    total_fake_incorrect = 0
+    total_count = 0
     batch_bar = tqdm(total=len(dl), dynamic_ncols=True, leave=False, position=0, desc='Validation')
 
+    batch_size = 0
     for i, (x, y) in enumerate(dl):
         x = x.to(device)
         batch_size = x.shape[0]
 
         # generate examples
         noise = generator.generate_noise(batch_size).to(device)
-        # one_hot_fake = mnist_to_one_hot(torch.randint(0, 10, (batch_size,))).to(device)
         one_hot = mnist_to_one_hot(y).to(device)
-        x_generated = generator(noise, one_hot)
+        if hyperparameters['mock_real']:
+            one_hot_fake = one_hot
+        else:
+            one_hot_fake = mnist_to_one_hot(torch.randint(0, 10, (batch_size,))).to(device)
+        x_generated = generator(noise, one_hot_fake)
 
         # generate loss from real examples
         y_real = discriminator(x, one_hot)
         real_loss = loss_fn(y_real, torch.ones(batch_size, 1).to(device))
 
         # generate loss from fake examples
-        y_fake = discriminator(x_generated, one_hot)
+        y_fake = discriminator(x_generated, one_hot_fake)
         fake_loss = loss_fn(y_fake, torch.zeros(batch_size, 1).to(device))
 
         # combine loss
         loss = real_loss + fake_loss
-        total_loss += loss.item()
 
-        # calculate accuracy
-        total_acc += ((y_real > 0.5).sum() + (y_fake <= 0.5).sum()).item() / (2 * batch_size)
+        # calculate generator loss
+        generator_loss = loss_fn(y_fake, torch.ones(batch_size, 1).to(device))
+
+        # update statistics
+        total_discriminator_real_loss += real_loss.item()
+        total_discriminator_fake_loss += fake_loss.item()
+        total_discriminator_combined_loss += loss.item()
+        total_generator_loss += generator_loss.item()
+        total_real_correct += (y_real > 0.5).sum().item()
+        total_fake_incorrect += (y_fake > 0.5).sum().item()
+        total_count += len(x)
 
         # update progress bar
         batch_bar.set_postfix(
-            loss="{:.04f}".format(float(total_loss / (i + 1))),
-            acc="{:.04f}%".format(float(total_acc * 100 / (i + 1)))
+            disc_real_loss="{:.04f}".format(float(total_discriminator_real_loss / (i + 1))),
+            disc_fake_loss="{:.04f}".format(float(total_discriminator_fake_loss / (i + 1))),
+            disc_combined_loss="{:.04f}".format(float(total_discriminator_combined_loss / (i + 1))),
+            gen_loss="{:.04f}".format(float(total_generator_loss / (i + 1))),
+            real_correct="{:.04f}%".format(float(total_real_correct * 100 / total_count)),
+            fake_incorrect="{:.04f}%".format(float(total_fake_incorrect * 100 / total_count)),
         )
         batch_bar.update()
     batch_bar.close()
-    print(f'Validation: acc={total_acc * 100 / len(dl):.04f}, loss={total_loss / len(dl):.04f}')
+    print_validation_statistics(
+        total_discriminator_combined_loss / len(dl),
+        total_discriminator_real_loss / len(dl),
+        total_discriminator_fake_loss / len(dl),
+        total_generator_loss / len(dl),
+        total_real_correct * 100 / total_count,
+        total_fake_incorrect * 100 / total_count,
+    )
 
     # output generated images to file
     if save_outputs:
@@ -321,7 +357,7 @@ def val(generator, discriminator, dl, loss_fn, hyperparameters, save_outputs=Tru
         plt.savefig(os.path.join(hyperparameters['save_directory'], f"generated_epoch_{epoch}.png"))
         plt.close()
 
-    return total_loss / len(dl), total_acc * 100 / len(dl)
+    # return total_loss / len(dl), total_acc * 100 / len(dl)
 
 
 # train
