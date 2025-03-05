@@ -174,6 +174,27 @@ def print_validation_statistics(discriminator_combined_loss, discriminator_real_
     print(f'\t{"Real correctness rate:":<30}{real_correctness_rate:.04f}%')
     print(f'\t{"Generator fooling rate:":<30}{generator_fooling_rate:.04f}%')
 
+def visualize_mnist(generator):
+    size = 10
+
+    generator.eval()
+    imgs = generator(
+        generator.generate_noise(size).to(device),
+        mnist_to_one_hot([i for i in range(size)]).to(device)
+    )
+    img_size = int(math.sqrt(imgs[0].shape[-1]))
+
+    fig, axes = plt.subplots(1, size)
+
+    for idx in range(10):
+        img = torch.clamp(imgs[idx], 0, 255).cpu().detach().numpy().reshape(img_size, img_size)  # Assuming square
+        axes[idx].imshow(img, cmap='gray')
+        axes[idx].set_title(idx, fontsize=10)
+        axes[idx].axis('off')
+        
+    plt.savefig(os.path.join(hyperparameters['save_directory'], f"generated_epoch_{epoch}.png"))
+    plt.close()
+
 def train_discriminator_one_step(generator, discriminator, x, y, loss_fn, discriminator_optimizer, mock_real=True):
     batch_size = x.shape[0]
 
@@ -343,21 +364,7 @@ def val(generator, discriminator, dl, loss_fn, hyperparameters, save_outputs=Tru
 
     # output generated images to file
     if save_outputs:
-        size = min(batch_size, hyperparameters["num_images"] if hyperparameters["num_images"] else batch_size)
-        img_size = int(math.sqrt(x_generated[0].shape[-1]))
-        selected_indices = random.sample(range(len(x_generated)), size)
-        fig, axes = plt.subplots(1, size)
-
-        for idx, j in enumerate(selected_indices):
-            img = torch.clamp(x_generated[j], 0, 255).cpu().detach().numpy().reshape(img_size, img_size)  # Assuming square
-            axes[idx].imshow(img, cmap='gray')
-            axes[idx].set_title(f"Digit: {y[j].item()}", fontsize=10)
-            axes[idx].axis('off')
-            
-        plt.savefig(os.path.join(hyperparameters['save_directory'], f"generated_epoch_{epoch}.png"))
-        plt.close()
-
-    # return total_loss / len(dl), total_acc * 100 / len(dl)
+        visualize_mnist(generator)
 
 
 # train
