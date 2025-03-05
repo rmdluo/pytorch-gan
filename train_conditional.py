@@ -2,6 +2,7 @@
 import torch
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
+from torch.autograd import Variable
 from torchsummary import summary
 from utils import mnist_to_one_hot
 
@@ -9,6 +10,8 @@ from utils import mnist_to_one_hot
 from tqdm import tqdm
 
 # matplotlib import
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 # MLP GAN imports
@@ -26,45 +29,48 @@ hyperparameters = {
     # train settings
     'batch_size': 128,
     'num_workers': 4,
-    'num_discriminator_steps': 2,
+    'num_discriminator_steps': 1,
     'num_generator_steps': 1,
     'epochs': 200,
 
     # optimizer settings
-    'discriminator_optimizer': torch.optim.AdamW,
+    'discriminator_optimizer': torch.optim.Adam,
     'discriminator_optimizer_settings': {
-        'lr': 3e-4,
+        'lr': 2e-4,
         'betas': (0.5, 0.999),
     },
-    'generator_optimizer': torch.optim.AdamW,
+    'generator_optimizer': torch.optim.Adam,
     'generator_optimizer_settings': {
-        'lr': 5e-4,
+        'lr': 2e-4,
         'betas': (0.5, 0.999),
     },
 
     # lr scheduler settings
-    'lr_scheduler': torch.optim.lr_scheduler.CosineAnnealingLR,
-    'lr_scheduler_settings': {
-        'T_max': 200,
-        'eta_min': 1e-7,
-    },
+    'lr_scheduler': None,
+    'lr_scheduler_settings': {},
     'min_lr': 0,
 
     # architecture
     'noise_dim': 100,
     'cond_dim': 10,
     'generator_activation': torch.nn.ReLU,
-    'generator_final_activation': torch.nn.Sigmoid,
-    'generator_dropout_prob': 0.5,
+    'generator_activation_args': {},
+    'generator_final_activation': torch.nn.Tanh,
+    'generator_final_activation_args': {},
+    'generator_dropout_prob': 0.0,
     'generator_normalize': torch.nn.BatchNorm1d,
+    'generator_normalize_args': {},
     'discriminator_activation': torch.nn.LeakyReLU,
+    'discriminator_activation_args': {'negative_slope': 0.2},
     'discriminator_final_activation': torch.nn.Sigmoid,
-    'discriminator_dropout_prob': 0.5,
-    'discriminator_normalize': None,
+    'discriminator_final_activation_args': {},
+    'discriminator_dropout_prob': 0.0,
+    'discriminator_normalize': torch.nn.BatchNorm1d,
+    'discriminator_normalize_args': {},
 
     # example image output settings
     'num_images': 4,
-    'save_directory': 'conditional'
+    'save_directory': 'smaller_conditioning_output_dim'
 }
 index = 0
 original = hyperparameters['save_directory']
@@ -78,7 +84,7 @@ with open(os.path.join(hyperparameters['save_directory'], "config.json"), "w") a
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 # load dataset
-transform = transforms.Compose([transforms.ToTensor(), transforms.Lambda(lambda x: x.flatten())])
+transform = transforms.Compose([transforms.ToTensor(), transforms.Normalize(mean=(0.5), std=(0.5)), transforms.Lambda(lambda x: x.flatten())])
 mnist_train = datasets.MNIST(root='./data', train=True, download=True, transform=transform)
 mnist_val = datasets.MNIST(root='./data', train=False, download=True, transform=transform)
 image_shape = mnist_train[0][0].shape[0]
@@ -106,10 +112,14 @@ generator = ConditionalGenerator(
     hyperparameters['cond_dim'],
     image_shape,
     hyperparameters['generator_activation'],
+    hyperparameters['generator_activation_args'],
     hyperparameters['generator_final_activation'],
+    hyperparameters['generator_final_activation_args'],
     hyperparameters['generator_dropout_prob'],
     hyperparameters['generator_normalize'],
+    hyperparameters['generator_normalize_args'],
 )
+generator.weight_init(0, 0.02)
 generator.to(device)
 print("###########################  GENERATOR  ##########################")
 summary(generator, input_size=[tuple([hyperparameters['noise_dim']]), tuple([hyperparameters['cond_dim']])])
@@ -121,10 +131,14 @@ discriminator = ConditionalDiscriminator(
     hyperparameters['cond_dim'],
     1,
     hyperparameters['discriminator_activation'],
+    hyperparameters['discriminator_activation_args'],
     hyperparameters['discriminator_final_activation'],
+    hyperparameters['discriminator_final_activation_args'],
     hyperparameters['discriminator_dropout_prob'],
     hyperparameters['discriminator_normalize'],
+    hyperparameters['discriminator_normalize_args'],
 )
+discriminator.weight_init(0, 0.02)
 discriminator.to(device)
 print("#######################  DISCRIMINATOR  ########################")
 summary(discriminator, input_size=[tuple([image_shape]), tuple([hyperparameters['cond_dim']])])
@@ -144,100 +158,68 @@ if hyperparameters['lr_scheduler']:
     discriminator_lr_scheduler = hyperparameters['lr_scheduler'](discriminator_optimizer, **hyperparameters['lr_scheduler_settings'])
 
 
-# Train/Val loops
-def train_discriminator(generator, discriminator, dl, loss_fn, discriminator_optimizer, hyperparameters):
-    generator.train()
-    discriminator.train()
-
+def train_discriminator_one_step(generator, discriminator, x, y, loss_fn, discriminator_optimizer, hyperparameters):
     for i in range(hyperparameters['num_discriminator_steps']):
-        total_real_loss = 0
-        total_fake_loss = 0
-        total_loss = 0
-        batch_bar = tqdm(total=len(dl), dynamic_ncols=True, leave=False, position=0, desc=f'Train Discriminator Step {i+1}')
+        batch_size = x.shape[0]
 
-        for j, (x, y) in enumerate(dl):
-            x = x.to(device)
-            batch_size = x.shape[0]
+        # zero out gradients
+        discriminator_optimizer.zero_grad()
 
-            # zero out gradients
-            discriminator_optimizer.zero_grad()
+        # generate examples
+        noise = generator.generate_noise(batch_size).to(device)
+        one_hot = mnist_to_one_hot(y).to(device)
+        # one_hot_fake = mnist_to_one_hot(torch.randint(0, 10, (batch_size,))).to(device)
 
-            # generate examples
-            noise = torch.randn((batch_size, hyperparameters['noise_dim']))
-            noise = noise.to(device)
-            one_hot = mnist_to_one_hot(y).to(device)
-            x_generated = generator(noise, one_hot)
+        x_generated = generator(noise, one_hot)
 
-            # generate loss from real examples
-            y_real = discriminator(x, one_hot)
-            real_loss = loss_fn(y_real, torch.ones(batch_size, 1).to(device))
+        # generate loss from real examples
+        y_real = discriminator(x, one_hot)
+        real_loss = loss_fn(y_real, torch.ones(batch_size, 1).to(device))
 
-            # generate loss from fake examples
-            y_fake = discriminator(x_generated.detach(), one_hot)
-            fake_loss = loss_fn(y_fake, torch.zeros(batch_size, 1).to(device))
+        # generate loss from fake examples
+        y_fake = discriminator(x_generated, one_hot)
+        fake_loss = loss_fn(y_fake, torch.zeros(batch_size, 1).to(device))
 
-            # combine loss
-            loss = real_loss + fake_loss
+        # combine loss
+        loss = real_loss + fake_loss
 
-            # backprop
-            loss.backward()
-            discriminator_optimizer.step()
+        # backprop
+        loss.backward()
+        discriminator_optimizer.step()
 
-            # update batch bar
-            total_real_loss += real_loss.item()
-            total_fake_loss += fake_loss.item()
-            total_loss += loss.item()
-            batch_bar.set_postfix(
-                real_loss="{:.04f}".format(float(total_real_loss / (j + 1))),
-                fake_loss="{:.04f}".format(float(total_fake_loss / (j + 1))),
-                loss="{:.04f}".format(float(total_loss / (j + 1))),
-            )
-            batch_bar.update()
-        batch_bar.close()
-        print(
-            f"Train Discriminator Step {i+1}: " +
-            f"fake_loss={float(total_fake_loss / len(dl)):.04f}, " +
-            f"loss={total_loss / len(dl):.04f}, " +
-            f"real_loss=loss={total_real_loss / len(dl):.04f}"
-        )
+def train_generator_one_step(generator, discriminator, x, y, loss_fn, generator_optimizer, hyperparameters):
+    for i in range(hyperparameters['num_generator_steps']):
+        batch_size = x.shape[0]
 
-def train_generator(generator, discriminator, dl, loss_fn, generator_optimizer, hyperparameters):
+        # zero out gradients
+        generator_optimizer.zero_grad()
+
+        # generate examples
+        noise = generator.generate_noise(batch_size).to(device)
+        one_hot = mnist_to_one_hot(y).to(device)
+        # one_hot_fake = mnist_to_one_hot(torch.randint(0, 10, (batch_size,))).to(device)
+        x_generated = generator(noise, one_hot)
+
+        # generate loss from fake examples
+        y_fake = discriminator(x_generated, one_hot)
+        loss = loss_fn(y_fake, torch.ones(batch_size, 1).to(device))
+
+        # backprop
+        loss.backward()
+        generator_optimizer.step()
+
+def train(generator, discriminator, dl, loss_fn, generator_optimizer, discriminator_optimizer, hyperparameters):
     generator.train()
     discriminator.train()
-    
-    for i in range(hyperparameters['num_generator_steps']):
-        total_loss = 0
-        batch_bar = tqdm(total=len(dl), dynamic_ncols=True, leave=False, position=0, desc=f'Train Generator Step {i+1}')
 
-        for j, (x, y) in enumerate(dl):
-            x = x.to(device)
-            batch_size = x.shape[0]
+    batch_bar = tqdm(total=len(dl), dynamic_ncols=True, leave=False, position=0, desc='Train')
 
-            # zero out gradients
-            generator_optimizer.zero_grad()
+    for j, (x, y) in enumerate(dl):
+        x = x.to(device)
+        y = y.to(device)
+        train_discriminator_one_step(generator, discriminator, x, y, loss_fn, discriminator_optimizer, hyperparameters)
+        train_generator_one_step(generator, discriminator, x, y, loss_fn, generator_optimizer, hyperparameters)
 
-            # generate examples
-            noise = torch.randn((batch_size, hyperparameters['noise_dim']))
-            noise = noise.to(device)
-            one_hot = mnist_to_one_hot(y).to(device)
-            x_generated = generator(noise, one_hot)
-
-            # generate loss from fake examples
-            y_fake = discriminator(x_generated, one_hot)
-            loss = loss_fn(y_fake, torch.ones(batch_size, 1).to(device))
-
-            # backprop
-            loss.backward()
-            generator_optimizer.step()
-
-            # update batch bar
-            total_loss += loss.item()
-            batch_bar.set_postfix(
-                loss="{:.04f}".format(float(total_loss / (j + 1))),
-            )
-            batch_bar.update()
-        batch_bar.close()
-        print(f'Train Generator Step {i+1}: loss={total_loss / len(dl):.04f}')
 
 def val(generator, discriminator, dl, loss_fn, hyperparameters, save_outputs=True):
     # Just doing accuracy of detection for now, later can add something like FID
@@ -253,8 +235,8 @@ def val(generator, discriminator, dl, loss_fn, hyperparameters, save_outputs=Tru
         batch_size = x.shape[0]
 
         # generate examples
-        noise = torch.randn((batch_size, hyperparameters['noise_dim']))
-        noise = noise.to(device)
+        noise = generator.generate_noise(batch_size).to(device)
+        # one_hot_fake = mnist_to_one_hot(torch.randint(0, 10, (batch_size,))).to(device)
         one_hot = mnist_to_one_hot(y).to(device)
         x_generated = generator(noise, one_hot)
 
@@ -310,9 +292,11 @@ for epoch in range(hyperparameters['epochs']):
         f"Discriminator LR: {discriminator_optimizer.param_groups[0]['lr']:.06f}"
     )
 
-    train_discriminator(generator, discriminator, train_dl, loss_fn, discriminator_optimizer, hyperparameters)
-    val(generator, discriminator, val_dl, loss_fn, hyperparameters, save_outputs=False)
-    train_generator(generator, discriminator, train_dl, loss_fn, generator_optimizer, hyperparameters)
+    # train_discriminator(generator, discriminator, train_dl, loss_fn, discriminator_optimizer, hyperparameters)
+    # val(generator, discriminator, val_dl, loss_fn, hyperparameters, save_outputs=False)
+    # train_generator(generator, discriminator, train_dl, loss_fn, generator_optimizer, hyperparameters)
+
+    train(generator, discriminator, train_dl, loss_fn, generator_optimizer, discriminator_optimizer, hyperparameters)
     val(generator, discriminator, val_dl, loss_fn, hyperparameters, save_outputs=True)
 
     if hyperparameters['lr_scheduler']:
