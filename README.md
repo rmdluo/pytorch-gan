@@ -4,7 +4,7 @@ This is an implementation of the papers [Generative Adversarial Networks](https:
 
 ## Setup
 1. Install PyTorch from https://pytorch.org/ - Note: they removed conda support, but you can still install it using pip in a conda environment (that's what I did)
-2. `pip install tqdm pillow pandas numpy matplotlib`
+2. `pip install tqdm pillow pandas numpy matplotlib torchsummary`
 
 ## Run
 For GAN:
