@@ -31,6 +31,7 @@ hyperparameters = {
     'num_workers': 4,
     'num_discriminator_steps': 1,
     'num_generator_steps': 1,
+    'mock_real': False,
     'epochs': 200,
 
     # optimizer settings
@@ -158,55 +159,58 @@ if hyperparameters['lr_scheduler']:
     discriminator_lr_scheduler = hyperparameters['lr_scheduler'](discriminator_optimizer, **hyperparameters['lr_scheduler_settings'])
 
 
-def train_discriminator_one_step(generator, discriminator, x, y, loss_fn, discriminator_optimizer, hyperparameters):
-    for i in range(hyperparameters['num_discriminator_steps']):
-        batch_size = x.shape[0]
+def train_discriminator_one_step(generator, discriminator, x, y, loss_fn, discriminator_optimizer, mock_real=True):
+    batch_size = x.shape[0]
 
-        # zero out gradients
-        discriminator_optimizer.zero_grad()
+    # zero out gradients
+    discriminator_optimizer.zero_grad()
 
-        # generate examples
-        noise = generator.generate_noise(batch_size).to(device)
-        one_hot = mnist_to_one_hot(y).to(device)
-        # one_hot_fake = mnist_to_one_hot(torch.randint(0, 10, (batch_size,))).to(device)
+    # generate examples
+    noise = generator.generate_noise(batch_size).to(device)
+    one_hot = mnist_to_one_hot(y).to(device)
+    if mock_real:
+        one_hot_fake = one_hot
+    else:
+        one_hot_fake = mnist_to_one_hot(torch.randint(0, 10, (batch_size,))).to(device)
+    x_generated = generator(noise, one_hot_fake)
 
-        x_generated = generator(noise, one_hot)
+    # generate loss from real examples
+    y_real = discriminator(x, one_hot)
+    real_loss = loss_fn(y_real, torch.ones(batch_size, 1).to(device))
 
-        # generate loss from real examples
-        y_real = discriminator(x, one_hot)
-        real_loss = loss_fn(y_real, torch.ones(batch_size, 1).to(device))
+    # generate loss from fake examples
+    y_fake = discriminator(x_generated, one_hot_fake)
+    fake_loss = loss_fn(y_fake, torch.zeros(batch_size, 1).to(device))
 
-        # generate loss from fake examples
-        y_fake = discriminator(x_generated, one_hot)
-        fake_loss = loss_fn(y_fake, torch.zeros(batch_size, 1).to(device))
+    # combine loss
+    loss = real_loss + fake_loss
 
-        # combine loss
-        loss = real_loss + fake_loss
+    # backprop
+    loss.backward()
+    discriminator_optimizer.step()
 
-        # backprop
-        loss.backward()
-        discriminator_optimizer.step()
+def train_generator_one_step(generator, discriminator, x, y, loss_fn, generator_optimizer, mock_real=True):
+    batch_size = x.shape[0]
 
-def train_generator_one_step(generator, discriminator, x, y, loss_fn, generator_optimizer, hyperparameters):
-    for i in range(hyperparameters['num_generator_steps']):
-        batch_size = x.shape[0]
+    # zero out gradients
+    generator_optimizer.zero_grad()
 
-        # zero out gradients
-        generator_optimizer.zero_grad()
+    # generate examples
+    noise = generator.generate_noise(batch_size).to(device)
+    one_hot = mnist_to_one_hot(y).to(device)
+    if mock_real:
+        one_hot_fake = one_hot
+    else:
+        one_hot_fake = mnist_to_one_hot(torch.randint(0, 10, (batch_size,))).to(device)
+    x_generated = generator(noise, one_hot_fake)
 
-        # generate examples
-        noise = generator.generate_noise(batch_size).to(device)
-        one_hot = mnist_to_one_hot(y).to(device)
-        # one_hot_fake = mnist_to_one_hot(torch.randint(0, 10, (batch_size,))).to(device)
-        x_generated = generator(noise, one_hot)
+    # generate loss from fake examples
+    y_fake = discriminator(x_generated, one_hot_fake)
+    loss = loss_fn(y_fake, torch.ones(batch_size, 1).to(device))
 
-        # generate loss from fake examples
-        y_fake = discriminator(x_generated, one_hot)
-        loss = loss_fn(y_fake, torch.ones(batch_size, 1).to(device))
-
-        # backprop
-        loss.backward()
-        generator_optimizer.step()
+    # backprop
+    loss.backward()
+    generator_optimizer.step()
 
 def train(generator, discriminator, dl, loss_fn, generator_optimizer, discriminator_optimizer, hyperparameters):
     generator.train()
@@ -217,8 +221,10 @@ def train(generator, discriminator, dl, loss_fn, generator_optimizer, discrimina
     for j, (x, y) in enumerate(dl):
         x = x.to(device)
         y = y.to(device)
-        train_discriminator_one_step(generator, discriminator, x, y, loss_fn, discriminator_optimizer, hyperparameters)
-        train_generator_one_step(generator, discriminator, x, y, loss_fn, generator_optimizer, hyperparameters)
+        for i in range(hyperparameters['num_discriminator_steps']):
+            train_discriminator_one_step(generator, discriminator, x, y, loss_fn, discriminator_optimizer, hyperparameters['mock_real'])
+        for i in range(hyperparameters['num_generator_steps']):
+            train_generator_one_step(generator, discriminator, x, y, loss_fn, generator_optimizer, hyperparameters['mock_real'])
 
 
 def val(generator, discriminator, dl, loss_fn, hyperparameters, save_outputs=True):
@@ -291,10 +297,6 @@ for epoch in range(hyperparameters['epochs']):
         f"Generator LR: {generator_optimizer.param_groups[0]['lr']:.06f}, " +
         f"Discriminator LR: {discriminator_optimizer.param_groups[0]['lr']:.06f}"
     )
-
-    # train_discriminator(generator, discriminator, train_dl, loss_fn, discriminator_optimizer, hyperparameters)
-    # val(generator, discriminator, val_dl, loss_fn, hyperparameters, save_outputs=False)
-    # train_generator(generator, discriminator, train_dl, loss_fn, generator_optimizer, hyperparameters)
 
     train(generator, discriminator, train_dl, loss_fn, generator_optimizer, discriminator_optimizer, hyperparameters)
     val(generator, discriminator, val_dl, loss_fn, hyperparameters, save_outputs=True)
