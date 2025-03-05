@@ -158,6 +158,12 @@ if hyperparameters['lr_scheduler']:
     generator_lr_scheduler = hyperparameters['lr_scheduler'](generator_optimizer, **hyperparameters['lr_scheduler_settings'])
     discriminator_lr_scheduler = hyperparameters['lr_scheduler'](discriminator_optimizer, **hyperparameters['lr_scheduler_settings'])
 
+def print_train_statistics(total_discriminator_combined_loss, total_discriminator_real_loss, total_discriminator_fake_loss, total_generator_loss, count):
+    print('Train statistics:')
+    print(f'\t{"Discriminator combined loss:":<30}{total_discriminator_combined_loss / count:.04f}')
+    print(f'\t{"Discriminator real loss:":<30}{total_discriminator_real_loss / count:.04f}')
+    print(f'\t{"Discriminator fake loss:":<30}{total_discriminator_fake_loss / count:.04f}')
+    print(f'\t{"Generator loss:":<30}{total_generator_loss / count:.04f}')
 
 def train_discriminator_one_step(generator, discriminator, x, y, loss_fn, discriminator_optimizer, mock_real=True):
     batch_size = x.shape[0]
@@ -189,6 +195,8 @@ def train_discriminator_one_step(generator, discriminator, x, y, loss_fn, discri
     loss.backward()
     discriminator_optimizer.step()
 
+    return loss.item(), real_loss.item(), fake_loss.item()
+
 def train_generator_one_step(generator, discriminator, x, y, loss_fn, generator_optimizer, mock_real=True):
     batch_size = x.shape[0]
 
@@ -212,19 +220,46 @@ def train_generator_one_step(generator, discriminator, x, y, loss_fn, generator_
     loss.backward()
     generator_optimizer.step()
 
+    return loss.item()
+
 def train(generator, discriminator, dl, loss_fn, generator_optimizer, discriminator_optimizer, hyperparameters):
     generator.train()
     discriminator.train()
 
+    total_discriminator_real_loss = 0
+    total_discriminator_fake_loss = 0
+    total_discriminator_combined_loss = 0
+    total_generator_loss = 0
     batch_bar = tqdm(total=len(dl), dynamic_ncols=True, leave=False, position=0, desc='Train')
 
     for j, (x, y) in enumerate(dl):
         x = x.to(device)
         y = y.to(device)
         for i in range(hyperparameters['num_discriminator_steps']):
-            train_discriminator_one_step(generator, discriminator, x, y, loss_fn, discriminator_optimizer, hyperparameters['mock_real'])
+            discriminator_combined_loss, discriminator_real_loss, discriminator_fake_loss = train_discriminator_one_step(generator, discriminator, x, y, loss_fn, discriminator_optimizer, hyperparameters['mock_real'])
+            total_discriminator_real_loss += discriminator_real_loss
+            total_discriminator_fake_loss += discriminator_fake_loss
+            total_discriminator_combined_loss += discriminator_combined_loss
         for i in range(hyperparameters['num_generator_steps']):
-            train_generator_one_step(generator, discriminator, x, y, loss_fn, generator_optimizer, hyperparameters['mock_real'])
+            generator_loss = train_generator_one_step(generator, discriminator, x, y, loss_fn, generator_optimizer, hyperparameters['mock_real'])
+            total_generator_loss += generator_loss
+        
+        # update progress bar
+        batch_bar.set_postfix(
+            disc_real_loss="{:.04f}".format(float(total_discriminator_real_loss / (j + 1))),
+            disc_fake_loss="{:.04f}".format(float(total_discriminator_fake_loss / (j + 1))),
+            disc_combined_loss="{:.04f}".format(float(total_discriminator_combined_loss / (j + 1))),
+            gen_loss="{:.04f}".format(float(total_generator_loss / (j + 1))),
+        )
+        batch_bar.update()
+    batch_bar.close()
+    print_train_statistics(
+        total_discriminator_combined_loss,
+        total_discriminator_real_loss,
+        total_discriminator_fake_loss,
+        total_generator_loss,
+        len(dl),
+    )
 
 
 def val(generator, discriminator, dl, loss_fn, hyperparameters, save_outputs=True):
@@ -290,7 +325,6 @@ def val(generator, discriminator, dl, loss_fn, hyperparameters, save_outputs=Tru
 
 
 # train
-worst_acc = 100
 for epoch in range(hyperparameters['epochs']):
     print(
         f"Epoch {epoch+1}/{hyperparameters["epochs"]}, " +
