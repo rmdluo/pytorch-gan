@@ -2,26 +2,18 @@
 import torch
 from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
-from torch.autograd import Variable
 from torchsummary import summary
-from utils import mnist_to_one_hot
+from utils import mnist_to_one_hot, print_train_statistics, print_validation_statistics, visualize_mnist
 
 # tqdm import
 from tqdm import tqdm
-
-# matplotlib import
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 
 # MLP GAN imports
 from mlp.models import ConditionalGenerator, ConditionalDiscriminator
 
 # misc imports
-import math
-import os, shutil
+import os
 import json
-import random
 
 
 # Set hyperparameters
@@ -157,43 +149,6 @@ discriminator_optimizer = hyperparameters['discriminator_optimizer'](discriminat
 if hyperparameters['lr_scheduler']:
     generator_lr_scheduler = hyperparameters['lr_scheduler'](generator_optimizer, **hyperparameters['lr_scheduler_settings'])
     discriminator_lr_scheduler = hyperparameters['lr_scheduler'](discriminator_optimizer, **hyperparameters['lr_scheduler_settings'])
-
-def print_train_statistics(discriminator_combined_loss, discriminator_real_loss, discriminator_fake_loss, generator_loss):
-    print('Train statistics:')
-    print(f'\t{"Discriminator combined loss:":<30}{discriminator_combined_loss:.04f}')
-    print(f'\t{"Discriminator real loss:":<30}{discriminator_real_loss:.04f}')
-    print(f'\t{"Discriminator fake loss:":<30}{discriminator_fake_loss:.04f}')
-    print(f'\t{"Generator loss:":<30}{generator_loss:.04f}')
-
-def print_validation_statistics(discriminator_combined_loss, discriminator_real_loss, discriminator_fake_loss, generator_loss, real_correctness_rate, generator_fooling_rate):
-    print('Validation statistics:')
-    print(f'\t{"Discriminator combined loss:":<30}{discriminator_combined_loss:.04f}')
-    print(f'\t{"Discriminator real loss:":<30}{discriminator_real_loss:.04f}')
-    print(f'\t{"Discriminator fake loss:":<30}{discriminator_fake_loss:.04f}')
-    print(f'\t{"Generator loss:":<30}{generator_loss:.04f}')
-    print(f'\t{"Real correctness rate:":<30}{real_correctness_rate:.04f}%')
-    print(f'\t{"Generator fooling rate:":<30}{generator_fooling_rate:.04f}%')
-
-def visualize_mnist(generator):
-    size = 10
-
-    generator.eval()
-    imgs = generator(
-        generator.generate_noise(size).to(device),
-        mnist_to_one_hot([i for i in range(size)]).to(device)
-    )
-    img_size = int(math.sqrt(imgs[0].shape[-1]))
-
-    fig, axes = plt.subplots(1, size)
-
-    for idx in range(10):
-        img = torch.clamp(imgs[idx], 0, 255).cpu().detach().numpy().reshape(img_size, img_size)  # Assuming square
-        axes[idx].imshow(img, cmap='gray')
-        axes[idx].set_title(idx, fontsize=10)
-        axes[idx].axis('off')
-        
-    plt.savefig(os.path.join(hyperparameters['save_directory'], f"generated_epoch_{epoch}.png"))
-    plt.close()
 
 def train_discriminator_one_step(generator, discriminator, x, y, loss_fn, discriminator_optimizer, mock_real=True):
     batch_size = x.shape[0]
@@ -364,7 +319,11 @@ def val(generator, discriminator, dl, loss_fn, hyperparameters, save_outputs=Tru
 
     # output generated images to file
     if save_outputs:
-        visualize_mnist(generator)
+        visualize_mnist(
+            generator,
+            os.path.join(hyperparameters['save_directory'], f"generated_epoch_{epoch}.png"),
+            device,    
+        )
 
 
 # train

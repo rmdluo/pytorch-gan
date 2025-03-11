@@ -40,7 +40,6 @@ class LinearBlock(nn.Module):
         return y
 
     def weight_init(self, mean, std):
-        print("from linear block weight_init init linear")
         normal_init(self.linear, mean, std)
 
 class Generator(nn.Module):
@@ -59,7 +58,7 @@ class Generator(nn.Module):
     def weight_init(self, mean, std):
         self.apply(lambda x : normal_init(x, mean, std))
 
-    def generate_noise(self):
+    def generate_noise(self, batch_size):
         return torch.randn((batch_size, self.noise_dim))
 
 class Discriminator(nn.Module):
