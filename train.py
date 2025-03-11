@@ -26,39 +26,46 @@ hyperparameters = {
     'num_workers': 4,
     'num_discriminator_steps': 1,
     'num_generator_steps': 1,
-    'epochs': 1000,
+    'mock_real': True,
+    'epochs': 200,
 
     # optimizer settings
-    'discriminator_optimizer': torch.optim.AdamW,
+    'discriminator_optimizer': torch.optim.Adam,
     'discriminator_optimizer_settings': {
-        'lr': 0.0001,
+        'lr': 2e-4,
+        'betas': (0.5, 0.999),
     },
-    'generator_optimizer': torch.optim.AdamW,
+    'generator_optimizer': torch.optim.Adam,
     'generator_optimizer_settings': {
-        'lr': 0.0001,
+        'lr': 2e-4,
+        'betas': (0.5, 0.999),
     },
 
     # lr scheduler settings
-    'lr_scheduler': torch.optim.lr_scheduler.CosineAnnealingLR,
-    'lr_scheduler_settings': {
-        'T_max': 50,
-    },
+    'lr_scheduler': None,
+    'lr_scheduler_settings': {},
     'min_lr': 0,
 
     # architecture
     'noise_dim': 100,
     'generator_activation': torch.nn.ReLU,
-    'generator_final_activation': torch.nn.Sigmoid,
+    'generator_activation_args': {},
+    'generator_final_activation': torch.nn.Tanh,
+    'generator_final_activation_args': {},
     'generator_dropout_prob': 0.0,
-    'generator_normalize': True,
+    'generator_normalize': torch.nn.BatchNorm1d,
+    'generator_normalize_args': {},
     'discriminator_activation': torch.nn.LeakyReLU,
+    'discriminator_activation_args': {'negative_slope': 0.2},
     'discriminator_final_activation': torch.nn.Sigmoid,
-    'discriminator_dropout_prob': 0.5,
-    'discriminator_normalize': False,
+    'discriminator_final_activation_args': {},
+    'discriminator_dropout_prob': 0.0,
+    'discriminator_normalize': torch.nn.BatchNorm1d,
+    'discriminator_normalize_args': {},
 
     # example image output settings
     'num_images': 4,
-    'save_directory': 'base'
+    'save_directory': 'conditional_mock_real'
 }
 index = 0
 original = hyperparameters['save_directory']
@@ -99,10 +106,14 @@ generator = Generator(
     hyperparameters['noise_dim'],
     image_shape,
     hyperparameters['generator_activation'],
+    hyperparameters['generator_activation_args'],
     hyperparameters['generator_final_activation'],
+    hyperparameters['generator_final_activation_args'],
     hyperparameters['generator_dropout_prob'],
     hyperparameters['generator_normalize'],
+    hyperparameters['generator_normalize_args'],
 )
+generator.weight_init(0, 0.02)
 generator.to(device)
 print("###########################  GENERATOR  ##########################")
 summary(generator, input_size=tuple([hyperparameters['noise_dim']]))
@@ -113,10 +124,14 @@ discriminator = Discriminator(
     image_shape,
     1,
     hyperparameters['discriminator_activation'],
+    hyperparameters['discriminator_activation_args'],
     hyperparameters['discriminator_final_activation'],
+    hyperparameters['discriminator_final_activation_args'],
     hyperparameters['discriminator_dropout_prob'],
     hyperparameters['discriminator_normalize'],
+    hyperparameters['discriminator_normalize_args'],
 )
+discriminator.weight_init(0, 0.02)
 discriminator.to(device)
 print("#######################  DISCRIMINATOR  ########################")
 summary(discriminator, input_size=tuple([image_shape]))
@@ -125,7 +140,6 @@ with open(os.path.join(hyperparameters['save_directory'], "arch_discriminator.tx
 
 # set up loss_fn
 loss_fn = torch.nn.BCELoss()
-# loss_fn = torch.nn.BCEWithLogitsLoss()
 
 # set up optimizers
 generator_optimizer = hyperparameters['generator_optimizer'](generator.parameters(), **hyperparameters['generator_optimizer_settings'])
