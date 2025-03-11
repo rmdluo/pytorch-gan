@@ -19,7 +19,6 @@ class LinearBlock(nn.Module):
         self.normalize = None
         if normalize_fn:
             self.normalize = normalize_fn(output_dim, **normalize_args)
-        #     self.norm = nn.BatchNorm1d(output_dim)
 
         self.output_logits = output_logits
 
@@ -43,13 +42,13 @@ class LinearBlock(nn.Module):
         normal_init(self.linear, mean, std)
 
 class Generator(nn.Module):
-    def __init__(self, input_dim=100, output_dim=784, activation_fn=torch.nn.ReLU, final_activation_fn=nn.Sigmoid, dropout_prob=0.0, normalize=True, output_logits=False):
+    def __init__(self, input_dim=100, output_dim=784, activation_fn=torch.nn.ReLU, activation_args={}, final_activation_fn=nn.Sigmoid, final_activation_args={}, dropout_prob=0.0, normalize=None, normalize_args={}, output_logits=False):
         super().__init__()
 
         self.layers = nn.Sequential(
-            LinearBlock(input_dim, 1200, activation_fn, dropout_prob, normalize),
-            LinearBlock(1200, 1200, activation_fn, dropout_prob, normalize),
-            LinearBlock(1200, output_dim, final_activation_fn, 0.0, None, output_logits=output_logits)
+            LinearBlock(input_dim, 1200, activation_fn, dropout_prob, normalize, activation_args, normalize_args),
+            LinearBlock(1200, 1200, activation_fn, dropout_prob, normalize, activation_args, normalize_args),
+            LinearBlock(1200, output_dim, final_activation_fn, 0.0, None, activation_args=final_activation_args, output_logits=output_logits)
         )
 
     def forward(self, x):
@@ -62,13 +61,13 @@ class Generator(nn.Module):
         return torch.randn((batch_size, self.noise_dim))
 
 class Discriminator(nn.Module):
-    def __init__(self, input_dim=784, output_dim=1, activation_fn=nn.LeakyReLU, final_activation_fn=nn.Sigmoid, dropout_prob=0.0, normalize=True, output_logits=False):
+    def __init__(self, input_dim=784, output_dim=1, activation_fn=nn.LeakyReLU, activation_args={}, final_activation_fn=nn.Sigmoid, final_activation_args={}, dropout_prob=0.0, normalize=None, normalize_args={}, output_logits=False):
         super().__init__()
         
         self.layers = nn.Sequential(
-            LinearBlock(input_dim, 1200, activation_fn, dropout_prob, normalize),
-            LinearBlock(1200, 1200, activation_fn, dropout_prob, normalize),
-            LinearBlock(1200, output_dim, final_activation_fn, 0.0, None, output_logits=output_logits)
+            LinearBlock(input_dim, 1200, activation_fn, dropout_prob, normalize, activation_args, normalize_args),
+            LinearBlock(1200, 1200, activation_fn, dropout_prob, normalize, activation_args, normalize_args),
+            LinearBlock(1200, output_dim, final_activation_fn, 0.0, None, activation_args=final_activation_args, output_logits=output_logits)
         )
 
     def forward(self, x):
@@ -79,7 +78,7 @@ class Discriminator(nn.Module):
     
 
 class ConditionalGenerator(nn.Module):
-    def __init__(self, noise_dim=100, cond_dim=10, output_dim=784, activation_fn=torch.nn.ReLU, activation_args={}, final_activation_fn=nn.Sigmoid, final_activation_args={}, dropout_prob=0.0, normalize=True, normalize_args={}, output_logits=False):
+    def __init__(self, noise_dim=100, cond_dim=10, output_dim=784, activation_fn=torch.nn.ReLU, activation_args={}, final_activation_fn=nn.Sigmoid, final_activation_args={}, dropout_prob=0.0, normalize=None, normalize_args={}, output_logits=False):
         super().__init__()
 
         self.noise_dim = noise_dim
@@ -105,7 +104,7 @@ class ConditionalGenerator(nn.Module):
         return torch.randn((batch_size, self.noise_dim))
 
 class ConditionalDiscriminator(nn.Module):
-    def __init__(self, input_dim=784, cond_dim=10, output_dim=1, activation_fn=nn.LeakyReLU, activation_args={}, final_activation_fn=nn.Sigmoid, final_activation_args={}, dropout_prob=0.0, normalize=True, normalize_args={}, output_logits=False):
+    def __init__(self, input_dim=784, cond_dim=10, output_dim=1, activation_fn=nn.LeakyReLU, activation_args={}, final_activation_fn=nn.Sigmoid, final_activation_args={}, dropout_prob=0.0, normalize=None, normalize_args={}, output_logits=False):
         super().__init__()
 
         self.input_layer = LinearBlock(input_dim, 1024, activation_fn, dropout_prob, False, activation_args)
